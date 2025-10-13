@@ -1,0 +1,23 @@
+{
+  "data": {
+    "product_summaries": [
+      {
+        "__typename": "ProductSummary",
+        "tcin": "80790841",
+        "original_tcin": "80790841",
+        "item": {
+          "relationship_type_code": "SA"
+        },
+        "price": {
+          "current_retail": 599.99,
+          "display_was_now": false,
+          "formatted_current_price": "$599.99",
+          "formatted_current_price_type": "reg",
+          "reg_retail": 599.99,
+          "location_id": 3991
+        },
+        "promotions": []
+      }
+    ]
+  }
+}

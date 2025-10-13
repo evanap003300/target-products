@@ -16,6 +16,7 @@ class TargetStockMonitor:
 
     # API Configuration
     BASE_URL = "https://redsky.target.com/redsky_aggregations/v1/web/product_fulfillment_and_variation_hierarchy_v1"
+    PRICE_URL = "https://redsky.target.com/redsky_aggregations/v1/web/product_summary_basics_v1"
     API_KEY = "9f36aeafbe60771e321a7cc95a78140772ab3e96"
 
     def __init__(self, tcin: str, store_id: str, zip_code: str = "27599",
@@ -107,6 +108,57 @@ class TargetStockMonitor:
             print(f"[{self._timestamp()}] Unexpected error: {e}")
             return None
 
+    def get_price(self) -> Optional[Dict[str, Any]]:
+        """
+        Get the current price for the product.
+
+        Returns:
+            Dictionary with price information or None if request fails
+        """
+        try:
+            # Parameters for pricing endpoint
+            price_params = {
+                "key": self.API_KEY,
+                "tcin": self.tcin,
+                "pricing_store_id": self.store_id,
+            }
+
+            response = requests.get(
+                self.PRICE_URL,
+                params=price_params,
+                headers=self.headers,
+                timeout=10
+            )
+
+            # Check for successful response
+            if response.status_code == 200:
+                return self._parse_price_response(response.json())
+            elif response.status_code == 429:
+                print(f"[{self._timestamp()}] Rate limited (429) on price check. Backing off...")
+                return None
+            elif response.status_code == 403:
+                print(f"[{self._timestamp()}] Access forbidden (403) on price check.")
+                return None
+            elif response.status_code == 503:
+                print(f"[{self._timestamp()}] Service unavailable (503) on price check.")
+                return None
+            else:
+                print(f"[{self._timestamp()}] Price check HTTP {response.status_code}: {response.reason}")
+                return None
+
+        except requests.exceptions.Timeout:
+            print(f"[{self._timestamp()}] Price request timed out.")
+            return None
+        except requests.exceptions.ConnectionError:
+            print(f"[{self._timestamp()}] Price connection error.")
+            return None
+        except requests.exceptions.RequestException as e:
+            print(f"[{self._timestamp()}] Price request error: {e}")
+            return None
+        except Exception as e:
+            print(f"[{self._timestamp()}] Unexpected price error: {e}")
+            return None
+
     def _parse_response(self, data: Dict) -> Optional[Dict[str, Any]]:
         """
         Parse the API response to extract stock information.
@@ -148,6 +200,40 @@ class TargetStockMonitor:
             print(f"[{self._timestamp()}] Error parsing response: {e}")
             return None
 
+    def _parse_price_response(self, data: Dict) -> Optional[Dict[str, Any]]:
+        """
+        Parse the pricing API response to extract price information.
+
+        Args:
+            data: JSON response from the pricing API
+
+        Returns:
+            Dictionary with parsed price data or None if parsing fails
+        """
+        try:
+            # Navigate to the price data
+            product = data.get("data", {}).get("product", {})
+            price_data = product.get("price", {})
+
+            # Extract price information
+            current_retail = price_data.get("current_retail", 0)
+            formatted_price = price_data.get("formatted_current_price", f"${current_retail:.2f}")
+
+            # Also extract product title if available
+            item = product.get("item", {})
+            product_desc = item.get("product_description", {})
+            title = product_desc.get("title", "Unknown Product")
+
+            return {
+                "current_retail": current_retail,
+                "formatted_price": formatted_price,
+                "title": title
+            }
+
+        except (KeyError, AttributeError, TypeError) as e:
+            print(f"[{self._timestamp()}] Error parsing price response: {e}")
+            return None
+
     def monitor(self, check_interval: int = 60, max_attempts: Optional[int] = None):
         """
         Continuously monitor stock until product is available.
@@ -169,25 +255,32 @@ class TargetStockMonitor:
                 print(f"\n[{self._timestamp()}] Reached maximum attempts ({max_attempts}). Stopping.")
                 break
 
-            print(f"[{self._timestamp()}] Attempt #{attempt}: Checking stock...")
+            print(f"[{self._timestamp()}] Attempt #{attempt}: Checking stock and price...")
 
             stock_info = self.check_stock()
+            price_info = self.get_price()
 
             if stock_info:
                 quantity = stock_info["quantity"]
                 location = stock_info["location_name"]
+
+                # Get price if available
+                price_str = "N/A"
+                if price_info:
+                    price_str = price_info["formatted_price"]
 
                 if stock_info["in_stock"]:
                     print(f"\n{'=' * 60}")
                     print(f"[{self._timestamp()}] 🎯 IN STOCK! 🎯")
                     print(f"Location: {location}")
                     print(f"Quantity: {quantity}")
+                    print(f"Price: {price_str}")
                     print(f"Store ID: {self.store_id}")
                     print(f"TCIN: {self.tcin}")
                     print(f"{'=' * 60}\n")
                     break
                 else:
-                    print(f"[{self._timestamp()}] Out of stock at {location}. Waiting {check_interval}s...")
+                    print(f"[{self._timestamp()}] Out of stock at {location}. Price: {price_str}. Waiting {check_interval}s...")
             else:
                 print(f"[{self._timestamp()}] Check failed. Waiting {check_interval}s...")
 
@@ -204,7 +297,7 @@ def main():
     """Main entry point for the stock monitor."""
 
     # Configuration - Modify these values to monitor different products/stores
-    TCIN = "87576259"  # Product TCIN
+    TCIN = "80790841"  # Xbox Series X Console
     STORE_ID = "3241"  # UNC Franklin St.
     CHECK_INTERVAL = 60  # Seconds between checks (60s = 1 minute)
 

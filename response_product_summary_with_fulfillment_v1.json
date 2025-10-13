@@ -1,0 +1,77 @@
+{
+  "data": {
+    "product_summaries": [
+      {
+        "__typename": "ProductSummary",
+        "tcin": "80790841",
+        "desirability_cues": [
+          {
+            "code": "highly_rated",
+            "display": "Highly rated",
+            "long_description": "Based on average star rating, number of ratings and reviews (including incentivized), and verified purchases."
+          }
+        ],
+        "ornaments": [
+          {
+            "ornament": "highly_rated",
+            "display": "Highly rated",
+            "long_description": "Based on average star rating, number of ratings and reviews (including incentivized), and verified purchases.",
+            "ornament_type": "guest",
+            "template_type": "light_marker_with_star"
+          }
+        ],
+        "item": {
+          "is_limited_time_offer": false,
+          "relationship_type_code": "SA",
+          "product_classification": {
+            "item_type": {
+              "name": "Video Game Consoles",
+              "type": "244507"
+            }
+          },
+          "product_description": {
+            "title": "Xbox Series X Console"
+          },
+          "enrichment": {
+            "buy_url": "https://www.target.com/p/xbox-series-x-console/-/A-80790841"
+          },
+          "fulfillment": {},
+          "merchandise_classification": {
+            "class_id": 41,
+            "department_id": 207
+          },
+          "eligibility_rules": {}
+        },
+        "fulfillment": {
+          "product_id": "80790841",
+          "is_out_of_stock_in_all_store_locations": false,
+          "sold_out": false,
+          "shipping_options": {
+            "availability_status": "OUT_OF_STOCK",
+            "loyalty_availability_status": "OUT_OF_STOCK",
+            "services": []
+          },
+          "store_options": [
+            {
+              "search_response_store_type": "PRIMARY",
+              "location_available_to_promise_quantity": 1.0,
+              "location_id": "3241",
+              "store": {
+                "location_name": "UNC Franklin St"
+              },
+              "order_pickup": {
+                "availability_status": "IN_STOCK",
+                "pickup_date": "2025-10-13",
+                "guest_pick_sla": 120,
+                "location_locale": "America/New_York"
+              },
+              "in_store_only": {
+                "availability_status": "IN_STOCK"
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
