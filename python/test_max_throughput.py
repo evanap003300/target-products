@@ -2,15 +2,71 @@
 Maximum Throughput Test
 Tests the absolute maximum request rate without any delays or limitations.
 Useful for understanding where rate limits kick in.
+Includes browser fingerprinting to vary characteristics per request.
 """
 
 import requests
 import time
 import threading
+import random
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List
 from datetime import datetime
 from target_stock_monitor import TargetStockMonitor
+
+
+class BrowserFingerprint:
+    """Generate varied browser fingerprints for each request."""
+
+    USER_AGENTS = [
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/92.0.4515.159 Safari/537.36",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:89.0) Gecko/20100101 Firefox/89.0",
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/14.1.1 Safari/605.1.15",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/93.0.4577.82 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64; rv:89.0) Gecko/20100101 Firefox/89.0",
+    ]
+
+    ACCEPT_LANGUAGES = [
+        "en-US,en;q=0.9",
+        "en-US,en;q=0.8",
+        "en-GB,en;q=0.9",
+        "en-US,en-GB;q=0.9,en;q=0.8",
+        "en;q=0.9",
+    ]
+
+    ACCEPT_ENCODINGS = [
+        "gzip, deflate, br",
+        "gzip, deflate",
+        "br;q=1.0, gzip;q=0.8, *;q=0.1",
+        "gzip, deflate, br",
+    ]
+
+    @staticmethod
+    def get_random_fingerprint() -> Dict[str, str]:
+        """
+        Generate a random browser fingerprint with varied characteristics.
+
+        Returns:
+            Dictionary of header names and values mimicking different browsers
+        """
+        return {
+            "User-Agent": random.choice(BrowserFingerprint.USER_AGENTS),
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+            "Accept-Language": random.choice(BrowserFingerprint.ACCEPT_LANGUAGES),
+            "Accept-Encoding": random.choice(BrowserFingerprint.ACCEPT_ENCODINGS),
+            "DNT": random.choice(["1", "2"]),
+            "Connection": "keep-alive",
+            "Upgrade-Insecure-Requests": "1",
+            "Sec-Fetch-Dest": "document",
+            "Sec-Fetch-Mode": "navigate",
+            "Sec-Fetch-Site": "none",
+            "Sec-Fetch-User": "?1",
+            "Cache-Control": "max-age=0",
+        }
 
 
 class MaxThroughputTester:
@@ -20,6 +76,36 @@ class MaxThroughputTester:
         """Initialize the max throughput tester."""
         self.monitor = TargetStockMonitor(tcin=tcin, store_id=store_id)
         self.lock = threading.Lock()
+        self.current_fingerprint = None
+        self.current_visitor_id = None
+        self.request_count_with_fingerprint = 0
+
+    def _generate_visitor_id(self) -> str:
+        """Generate a realistic visitor_id that mimics Target's format."""
+        # Target format appears to be: 01 + hex characters
+        hex_part = ''.join(random.choices('0123456789ABCDEF', k=30))
+        return f"01{hex_part}"
+
+    def get_persistent_fingerprint(self, rotate_every: int = 10) -> tuple:
+        """
+        Get a persistent fingerprint that rotates every N requests.
+        Also rotates visitor_id to avoid Target's session tracking.
+
+        Args:
+            rotate_every: Number of requests before rotating to new fingerprint
+
+        Returns:
+            Tuple of (headers_dict, visitor_id)
+        """
+        with self.lock:
+            self.request_count_with_fingerprint += 1
+
+            # Generate new fingerprint and visitor_id every N requests
+            if (self.request_count_with_fingerprint - 1) % rotate_every == 0:
+                self.current_fingerprint = BrowserFingerprint.get_random_fingerprint()
+                self.current_visitor_id = self._generate_visitor_id()
+
+        return self.current_fingerprint, self.current_visitor_id
 
     def test_unlimited_concurrent(self, num_requests: int = 50, max_workers: int = 10,
                                   request_type: str = "stock") -> Dict:
@@ -54,12 +140,21 @@ class MaxThroughputTester:
             req_start = time.time()
 
             try:
+                # Get persistent browser fingerprint and visitor_id (rotates every 10 requests)
+                fingerprint, visitor_id = self.get_persistent_fingerprint(rotate_every=10)
+
+                # Merge fingerprint headers with existing headers
+                headers = {**self.monitor.headers, **fingerprint}
+
                 if request_type == "stock":
+                    # Create params with rotated visitor_id
+                    params = {**self.monitor.params, "visitor_id": visitor_id}
+
                     # Make direct request to capture status code
                     response = requests.get(
                         self.monitor.BASE_URL,
-                        params=self.monitor.params,
-                        headers=self.monitor.headers,
+                        params=params,
+                        headers=headers,
                         timeout=10
                     )
                 else:
@@ -71,7 +166,7 @@ class MaxThroughputTester:
                     response = requests.get(
                         self.monitor.PRICE_URL,
                         params=price_params,
-                        headers=self.monitor.headers,
+                        headers=headers,
                         timeout=10
                     )
 
@@ -208,14 +303,19 @@ class MaxThroughputTester:
 
 
 def main():
-    """Run maximum throughput tests."""
-    tester = MaxThroughputTester(tcin="80790841", store_id="3241")
+    """Run maximum throughput tests with browser fingerprinting."""
+    tester = MaxThroughputTester(tcin="92751015", store_id="3241")
 
     print("\n" + "=" * 70)
     print("MAXIMUM THROUGHPUT ANALYSIS")
     print("=" * 70)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("Testing to find rate limits and maximum throughput...")
+    print("\nBrowser fingerprinting enabled (persistent rotation):")
+    print("  - Browser fingerprint rotates every 10 requests")
+    print("  - Visitor ID regenerated with each fingerprint rotation")
+    print("  - Same User-Agent, Accept-Language, etc. within batch")
+    print("  - Mimics realistic browser behavior patterns")
 
     # Test 1: Blast stock requests with high concurrency
     print("\n\n[TEST 1] Maximum Stock Requests (50 requests, 10 workers)")

@@ -43,7 +43,7 @@ class TargetStockMonitor:
             "state": self.state,
             "latitude": self.latitude,
             "longitude": self.longitude,
-            "visitor_id": "0199DAB6A80D0201856B220F9301DDE6",
+            "visitor_id": "0199DA4E3FE202018E5628FF2CF3377C",
             "paid_membership": "false",
             "base_membership": "false",
             "card_membership": "false",
@@ -285,7 +285,7 @@ def main():
     """Main entry point for the stock monitor."""
 
     # Configuration - Modify these values to monitor different products/stores
-    TCIN = "80790841"  # Xbox Series X Console 
+    TCIN = "92751015"  # Product in stock
     STORE_ID = "3241"  # UNC Franklin St.
     CHECK_INTERVAL = 60  # Seconds between checks (60s = 1 minute)
 
