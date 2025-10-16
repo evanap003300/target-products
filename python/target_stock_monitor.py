@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """
 Target Product Stock Monitor
 Monitors Target product availability and alerts when in stock.
@@ -12,9 +11,6 @@ from datetime import datetime
 
 
 class TargetStockMonitor:
-    """Monitor Target product stock availability."""
-
-    # API Configuration
     BASE_URL = "https://redsky.target.com/redsky_aggregations/v1/web/product_fulfillment_and_variation_hierarchy_v1"
     PRICE_URL = "https://redsky.target.com/redsky_aggregations/v1/web/product_summary_basics_v1"
     API_KEY = "9f36aeafbe60771e321a7cc95a78140772ab3e96"
@@ -23,14 +19,6 @@ class TargetStockMonitor:
                  state: str = "NC", latitude: str = "35.930", longitude: str = "-79.040"):
         """
         Initialize the stock monitor.
-
-        Args:
-            tcin: Target product TCIN (e.g., "94973620")
-            store_id: Target store ID (e.g., "3241")
-            zip_code: ZIP code for the location
-            state: State abbreviation
-            latitude: Latitude coordinate
-            longitude: Longitude coordinate
         """
         self.tcin = tcin
         self.store_id = store_id
@@ -297,7 +285,7 @@ def main():
     """Main entry point for the stock monitor."""
 
     # Configuration - Modify these values to monitor different products/stores
-    TCIN = "80790841"  # Xbox Series X Console
+    TCIN = "80790841"  # Xbox Series X Console 
     STORE_ID = "3241"  # UNC Franklin St.
     CHECK_INTERVAL = 60  # Seconds between checks (60s = 1 minute)
 
