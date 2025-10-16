@@ -1,1 +1,2 @@
 requests>=2.31.0
+tls-client>=1.0.1

@@ -11,9 +11,17 @@ import threading
 import random
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List
+from typing import Dict, List, Tuple, Optional
 from datetime import datetime
 from target_stock_monitor import TargetStockMonitor
+
+# Try to import tls_client for advanced TLS fingerprinting
+try:
+    import tls_client
+    TLS_CLIENT_AVAILABLE = True
+except ImportError:
+    TLS_CLIENT_AVAILABLE = False
+    print("Warning: tls-client not installed. Install with: pip install tls-client")
 
 
 class BrowserFingerprint:
@@ -69,16 +77,112 @@ class BrowserFingerprint:
         }
 
 
+class TLSFingerprint:
+    """Manage TLS fingerprinting profiles matching browser types."""
+
+    # Map browser identifiers to TLS client profiles
+    # Each profile includes a list of compatible TLS clients to rotate through
+    TLS_PROFILES = {
+        "chrome": [
+            "chrome_120",
+            "chrome_117",
+            "chrome_116_PSK",
+            "chrome_112",
+            "chrome_110"
+        ],
+        "firefox": [
+            "firefox_120",
+            "firefox_117",
+            "firefox_108",
+        ],
+        "safari": [
+            "safari_16_0",
+            "safari_15_6_1",
+            "safari_15_3",
+        ],
+        "edge": [
+            "chrome_120",  # Edge uses Chromium, so use Chrome profiles
+            "chrome_117",
+        ],
+    }
+
+    @staticmethod
+    def get_tls_profile(browser_type: str = "chrome") -> Optional[str]:
+        """
+        Get a random TLS profile matching the browser type.
+
+        Args:
+            browser_type: "chrome", "firefox", "safari", or "edge"
+
+        Returns:
+            TLS client identifier string
+        """
+        if not TLS_CLIENT_AVAILABLE:
+            return None
+
+        profiles = TLSFingerprint.TLS_PROFILES.get(browser_type, TLSFingerprint.TLS_PROFILES["chrome"])
+        return random.choice(profiles)
+
+    @staticmethod
+    def get_browser_type_from_user_agent(user_agent: str) -> str:
+        """
+        Determine browser type from User-Agent string.
+
+        Args:
+            user_agent: User-Agent header value
+
+        Returns:
+            Browser type: "chrome", "firefox", "safari", or "edge"
+        """
+        user_agent_lower = user_agent.lower()
+
+        if "firefox" in user_agent_lower:
+            return "firefox"
+        elif "safari" in user_agent_lower and "chrome" not in user_agent_lower:
+            return "safari"
+        elif "edg" in user_agent_lower:
+            return "edge"
+        else:
+            return "chrome"  # Default to chrome
+
+    @staticmethod
+    def create_tls_session(tls_profile: str, random_order: bool = True) -> Optional[tls_client.Session]:
+        """
+        Create a tls_client.Session with the specified profile.
+
+        Args:
+            tls_profile: TLS client identifier
+            random_order: Randomize TLS extension order
+
+        Returns:
+            tls_client.Session or None if tls_client unavailable
+        """
+        if not TLS_CLIENT_AVAILABLE:
+            return None
+
+        try:
+            return tls_client.Session(
+                client_identifier=tls_profile,
+                random_tls_extension_order=random_order
+            )
+        except Exception as e:
+            print(f"Error creating TLS session: {e}")
+            return None
+
+
 class MaxThroughputTester:
     """Test maximum throughput and identify rate limit thresholds."""
 
-    def __init__(self, tcin: str = "80790841", store_id: str = "3241"):
+    def __init__(self, tcin: str = "80790841", store_id: str = "3241", use_tls: bool = True):
         """Initialize the max throughput tester."""
         self.monitor = TargetStockMonitor(tcin=tcin, store_id=store_id)
         self.lock = threading.Lock()
         self.current_fingerprint = None
         self.current_visitor_id = None
+        self.current_tls_profile = None
+        self.current_tls_session = None
         self.request_count_with_fingerprint = 0
+        self.use_tls = use_tls and TLS_CLIENT_AVAILABLE
 
     def _generate_visitor_id(self) -> str:
         """Generate a realistic visitor_id that mimics Target's format."""
@@ -86,26 +190,33 @@ class MaxThroughputTester:
         hex_part = ''.join(random.choices('0123456789ABCDEF', k=30))
         return f"01{hex_part}"
 
-    def get_persistent_fingerprint(self, rotate_every: int = 10) -> tuple:
+    def get_persistent_fingerprint(self, rotate_every: int = 10) -> Tuple[Dict[str, str], str, Optional[str], Optional[tls_client.Session]]:
         """
         Get a persistent fingerprint that rotates every N requests.
-        Also rotates visitor_id to avoid Target's session tracking.
+        Also rotates visitor_id and TLS profile to avoid Target's session tracking.
 
         Args:
             rotate_every: Number of requests before rotating to new fingerprint
 
         Returns:
-            Tuple of (headers_dict, visitor_id)
+            Tuple of (headers_dict, visitor_id, tls_profile, tls_session)
         """
         with self.lock:
             self.request_count_with_fingerprint += 1
 
-            # Generate new fingerprint and visitor_id every N requests
+            # Generate new fingerprint, visitor_id, and TLS profile every N requests
             if (self.request_count_with_fingerprint - 1) % rotate_every == 0:
                 self.current_fingerprint = BrowserFingerprint.get_random_fingerprint()
                 self.current_visitor_id = self._generate_visitor_id()
 
-        return self.current_fingerprint, self.current_visitor_id
+                # Generate matching TLS profile based on browser type
+                if self.use_tls:
+                    user_agent = self.current_fingerprint.get("User-Agent", "")
+                    browser_type = TLSFingerprint.get_browser_type_from_user_agent(user_agent)
+                    self.current_tls_profile = TLSFingerprint.get_tls_profile(browser_type)
+                    self.current_tls_session = TLSFingerprint.create_tls_session(self.current_tls_profile)
+
+        return self.current_fingerprint, self.current_visitor_id, self.current_tls_profile, self.current_tls_session
 
     def test_unlimited_concurrent(self, num_requests: int = 50, max_workers: int = 10,
                                   request_type: str = "stock") -> Dict:
@@ -140,8 +251,8 @@ class MaxThroughputTester:
             req_start = time.time()
 
             try:
-                # Get persistent browser fingerprint and visitor_id (rotates every 10 requests)
-                fingerprint, visitor_id = self.get_persistent_fingerprint(rotate_every=10)
+                # Get persistent browser fingerprint, visitor_id, and TLS profile (rotates every 10 requests)
+                fingerprint, visitor_id, tls_profile, tls_session = self.get_persistent_fingerprint(rotate_every=10)
 
                 # Merge fingerprint headers with existing headers
                 headers = {**self.monitor.headers, **fingerprint}
@@ -150,25 +261,58 @@ class MaxThroughputTester:
                     # Create params with rotated visitor_id
                     params = {**self.monitor.params, "visitor_id": visitor_id}
 
-                    # Make direct request to capture status code
-                    response = requests.get(
-                        self.monitor.BASE_URL,
-                        params=params,
-                        headers=headers,
-                        timeout=10
-                    )
+                    # Make request with TLS fingerprinting if available
+                    if self.use_tls and tls_session:
+                        try:
+                            response = tls_session.get(
+                                self.monitor.BASE_URL,
+                                params=params,
+                                headers=headers
+                            )
+                        except Exception as tls_error:
+                            # Fall back to requests if tls_client fails
+                            response = requests.get(
+                                self.monitor.BASE_URL,
+                                params=params,
+                                headers=headers,
+                                timeout=10
+                            )
+                    else:
+                        response = requests.get(
+                            self.monitor.BASE_URL,
+                            params=params,
+                            headers=headers,
+                            timeout=10
+                        )
                 else:
                     price_params = {
                         "key": self.monitor.API_KEY,
                         "tcin": self.monitor.tcin,
                         "pricing_store_id": self.monitor.store_id,
                     }
-                    response = requests.get(
-                        self.monitor.PRICE_URL,
-                        params=price_params,
-                        headers=headers,
-                        timeout=10
-                    )
+
+                    if self.use_tls and tls_session:
+                        try:
+                            response = tls_session.get(
+                                self.monitor.PRICE_URL,
+                                params=price_params,
+                                headers=headers
+                            )
+                        except Exception as tls_error:
+                            # Fall back to requests if tls_client fails
+                            response = requests.get(
+                                self.monitor.PRICE_URL,
+                                params=price_params,
+                                headers=headers,
+                                timeout=10
+                            )
+                    else:
+                        response = requests.get(
+                            self.monitor.PRICE_URL,
+                            params=price_params,
+                            headers=headers,
+                            timeout=10
+                        )
 
                 req_time = time.time() - req_start
                 status_code = response.status_code
@@ -303,19 +447,30 @@ class MaxThroughputTester:
 
 
 def main():
-    """Run maximum throughput tests with browser fingerprinting."""
-    tester = MaxThroughputTester(tcin="92751015", store_id="3241")
+    """Run maximum throughput tests with browser and TLS fingerprinting."""
+    tester = MaxThroughputTester(tcin="92751015", store_id="3241", use_tls=True)
 
     print("\n" + "=" * 70)
     print("MAXIMUM THROUGHPUT ANALYSIS")
     print("=" * 70)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("Testing to find rate limits and maximum throughput...")
-    print("\nBrowser fingerprinting enabled (persistent rotation):")
+    print("\nBrowser & HTTP Fingerprinting (persistent rotation):")
     print("  - Browser fingerprint rotates every 10 requests")
     print("  - Visitor ID regenerated with each fingerprint rotation")
     print("  - Same User-Agent, Accept-Language, etc. within batch")
     print("  - Mimics realistic browser behavior patterns")
+
+    if TLS_CLIENT_AVAILABLE:
+        print("\nTLS Fingerprinting (advanced anti-bot evasion):")
+        print("  - TLS profile matches browser type (Chrome/Firefox/Safari)")
+        print("  - JA3 fingerprint rotates every 10 requests")
+        print("  - Cipher suites, curves, and extensions vary by TLS version")
+        print("  - Makes traffic indistinguishable from real browsers")
+    else:
+        print("\nℹ️  TLS fingerprinting disabled (tls-client not installed)")
+        print("  - Install with: pip install tls-client")
+        print("  - Falling back to standard HTTP fingerprinting only")
 
     # Test 1: Blast stock requests with high concurrency
     print("\n\n[TEST 1] Maximum Stock Requests (50 requests, 10 workers)")
